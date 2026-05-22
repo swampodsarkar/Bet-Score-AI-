@@ -13,7 +13,13 @@ function initFirebase() {
     // Option 1: Service account JSON file (recommended for local)
     const keyPath = path.join(__dirname, '..', 'serviceAccountKey.json');
     if (fs.existsSync(keyPath)) {
-      serviceAccount = require(keyPath);
+      try {
+        const fileContent = fs.readFileSync(keyPath, 'utf8');
+        serviceAccount = JSON.parse(fileContent);
+      } catch (readErr) {
+        console.error('Failed to read serviceAccountKey.json:', readErr.message);
+        throw new Error('Invalid or corrupted serviceAccountKey.json file. Please re-download it from Firebase Console.');
+      }
     } 
     // Option 2: Base64 encoded in env (for Render/Railway etc)
     else if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
