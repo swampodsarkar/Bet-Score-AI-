@@ -3,7 +3,7 @@ const UserModel = require('../models/User');
 const BetModel = require('../models/Bet');
 const DepositModel = require('../models/Deposit');
 const WithdrawModel = require('../models/Withdraw');
-const { fetchUpcomingMatches, fetchMatchById, getMatchesByCompetition, isMatchLive, canBetOnMatch, LEAGUES } = require('../services/footballService');
+const { fetchUpcomingMatches, fetchMatchById, getMatchesByCompetition, isMatchLive, canBetOnMatch, getLiveScore, LEAGUES } = require('../services/footballService');
 const { placeBet, getUserActiveBets, cancelBet } = require('../services/bettingService');
 const { isAdmin, formatBalance, escapeMarkdown, parseBetCommand, getDisplayName, generateReferralLink, calcWinRate, isVipActive } = require('../utils/helpers');
 
@@ -119,6 +119,7 @@ function registerHandlers() {
 ⚽ /bet     — Browse & place bets
 📋 /mybets  — Your active bets
 🏆 /leaderboard — Top players
+🔴 /livescore  — Live match scores
 ❌ /cancelbet  — Cancel a pending bet
 ❌ /canceldeposit  — Cancel a pending deposit
 
@@ -280,8 +281,10 @@ function registerHandlers() {
       const comp = m.competition?.code || '';
       const live = isMatchLive(m);
       const canBet = canBetOnMatch(m);
+      const score = live ? getLiveScore(m) : null;
+      const scoreStr = score ? ` ⚽ ${score}` : '';
       text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-      text += `${live ? '🔴' : '⚽'} ${home} vs ${away}\n`;
+      text += `${live ? '🔴' : '⚽'} ${home} vs ${away}${scoreStr}\n`;
       text += `${live ? '🔴 LIVE' : `📅 ${date}`} | ${comp}\n`;
       if (canBet) {
         keyboard.push([{ text: `✅ ${home} vs ${away}`, callback_data: `match_${m.id}` }]);
@@ -740,6 +743,45 @@ function registerHandlers() {
       inline_keyboard: [
         [{ text: '📅 Upcoming', callback_data: 'matches_upcoming' }],
         [{ text: '🔴 Live Matches', callback_data: 'matches_live' }],
+        [{ text: '🔴 Live Scores', callback_data: 'livescore' }],
+        [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+      ]
+    };
+    await bot.sendMessage(chatId, text, { reply_markup: keyboard });
+  });
+
+  bot.onText(/^\/livescore$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const telegramId = msg.from.id;
+    const user = await UserModel.findOne(telegramId);
+    if (!user) return bot.sendMessage(chatId, 'Use /start first');
+
+    const all = await fetchUpcomingMatches();
+    const live = all.filter(m => isMatchLive(m));
+    if (!live.length) {
+      const menuKb = { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] };
+      return await bot.sendMessage(chatId, '🔴 No live matches right now.', { reply_markup: menuKb });
+    }
+
+    let text =
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `  🔴 LIVE SCORES (${live.length})\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    for (const m of live) {
+      const home = m.homeTeam?.shortName || m.homeTeam?.name || 'Home';
+      const away = m.awayTeam?.shortName || m.awayTeam?.name || 'Away';
+      const comp = m.competition?.code || '';
+      const score = getLiveScore(m) || '0 - 0';
+      text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      text += `🔴 ${home} vs ${away}\n`;
+      text += `   ⚽ ${score}  |  ${comp}\n`;
+    }
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `🔄 Live updates every 5 minutes`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '🔄 Refresh', callback_data: 'livescore' }],
         [{ text: '🔙 Main Menu', callback_data: 'menu' }]
       ]
     };
@@ -1286,6 +1328,7 @@ function registerHandlers() {
           inline_keyboard: [
             [{ text: '📅 Upcoming', callback_data: 'matches_upcoming' }],
             [{ text: '🔴 Live Matches', callback_data: 'matches_live' }],
+            [{ text: '🔴 Live Scores', callback_data: 'livescore' }],
             [{ text: '🔙 Main Menu', callback_data: 'menu' }]
           ]
         };
@@ -1316,7 +1359,38 @@ function registerHandlers() {
         });
         const keyboard = {
           inline_keyboard: [
+            [{ text: '🔴 Live Scores', callback_data: 'livescore' }],
             [{ text: '🔙 Back', callback_data: 'matches' }],
+            [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+          ]
+        };
+        await bot.sendMessage(chatId, text, { reply_markup: keyboard });
+      }
+
+      else if (data === 'livescore') {
+        await bot.answerCallbackQuery(query.id);
+        const all = await fetchUpcomingMatches();
+        const live = all.filter(m => isMatchLive(m));
+        if (!live.length) return bot.sendMessage(chatId, '🔴 No live matches right now.');
+        let text =
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `  🔴 LIVE SCORES (${live.length})\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        for (const m of live) {
+          const home = m.homeTeam?.shortName || m.homeTeam?.name || 'Home';
+          const away = m.awayTeam?.shortName || m.awayTeam?.name || 'Away';
+          const comp = m.competition?.code || '';
+          const score = getLiveScore(m) || '0 - 0';
+          text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+          text += `🔴 ${home} vs ${away}\n`;
+          text += `   ⚽ ${score}  |  ${comp}\n`;
+        }
+        text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        text += `🔄 Live updates every 5 minutes`;
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: '🔄 Refresh', callback_data: 'livescore' }],
+            [{ text: '🔙 Matches', callback_data: 'matches' }],
             [{ text: '🔙 Main Menu', callback_data: 'menu' }]
           ]
         };
@@ -1478,7 +1552,10 @@ function registerHandlers() {
     const date = new Date(m.utcDate).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const comp = m.competition?.code || '';
     const live = isMatchLive(m);
-    return `${live ? '🔴' : index}. ${home} vs ${away}\n   ${live ? '🔴 LIVE' : '🕒 ' + date} | ${comp}\n`;
+    const score = live ? getLiveScore(m) : null;
+    const scoreStr = score ? ` ⚽ ${score}` : '';
+    const statusStr = live ? (score ? `🔴 ${score}` : '🔴 LIVE') : '🕒 ' + date;
+    return `${live ? '🔴' : index}. ${home} vs ${away}\n   ${statusStr} | ${comp}\n`;
   }
 
   // ==================== PREMIUM MAIN MENU ====================
@@ -1514,7 +1591,10 @@ async function sendMainMenu(chatId, telegramId) {
         { text: '🎯 Place Bet', callback_data: 'bet' }
       ],
       [
-        { text: '📜 My Bets', callback_data: 'mybets' },
+        { text: '🔴 Live Scores', callback_data: 'livescore' },
+        { text: '📜 My Bets', callback_data: 'mybets' }
+      ],
+      [
         { text: '🏆 Leaderboard', callback_data: 'leaderboard' }
       ],
       [

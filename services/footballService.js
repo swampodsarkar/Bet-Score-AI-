@@ -115,6 +115,16 @@ async function getFinishedMatchesSince(dateFrom) {
   }
 }
 
+function getLiveScore(match) {
+  if (!match || !match.score) return null;
+  const home = match.score.fullTime?.home;
+  const away = match.score.fullTime?.away;
+  if (home !== null && home !== undefined && away !== null && away !== undefined) {
+    return `${home} - ${away}`;
+  }
+  return null;
+}
+
 function formatMatchForUser(match) {
   const home = match.homeTeam?.shortName || match.homeTeam?.name || 'Home';
   const away = match.awayTeam?.shortName || match.awayTeam?.name || 'Away';
@@ -159,5 +169,6 @@ module.exports = {
   formatMatchForUser,
   isMatchLive,
   canBetOnMatch,
+  getLiveScore,
   LEAGUES
 };
