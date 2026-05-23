@@ -120,6 +120,9 @@ function registerHandlers() {
 📋 /mybets  — Your active bets
 🏆 /leaderboard — Top players
 🔴 /livescore  — Live match scores
+🏆 /livewinner  — Recent big winners
+📊 /payouts  — Your payout history
+🎰 /spin  — Lucky spin & win coins
 ❌ /cancelbet  — Cancel a pending bet
 ❌ /canceldeposit  — Cancel a pending deposit
 
@@ -738,12 +741,10 @@ function registerHandlers() {
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `  ⚽ MATCH CENTER\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `Choose an option:`;
+      `Choose a league to view upcoming matches:`;
     const keyboard = {
       inline_keyboard: [
-        [{ text: '📅 Upcoming', callback_data: 'matches_upcoming' }],
-        [{ text: '🔴 Live Matches', callback_data: 'matches_live' }],
-        [{ text: '🔴 Live Scores', callback_data: 'livescore' }],
+        [{ text: '📅 Upcoming Matches', callback_data: 'matches_upcoming' }],
         [{ text: '🔙 Main Menu', callback_data: 'menu' }]
       ]
     };
@@ -786,6 +787,97 @@ function registerHandlers() {
       ]
     };
     await bot.sendMessage(chatId, text, { reply_markup: keyboard });
+  });
+
+  bot.onText(/^\/livewinner$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const telegramId = msg.from.id;
+    const user = await UserModel.findOne(telegramId);
+    if (!user) return bot.sendMessage(chatId, 'Use /start first');
+
+    const won = await BetModel.findRecentWon(10);
+    if (!won.length) {
+      return bot.sendMessage(chatId, '🏆 No winners yet. Be the first to place a bet!', { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+    }
+    let text =
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `  🏆 LIVE WINNER\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    for (const b of won) {
+      const u = await UserModel.findOne(b.telegramId);
+      const name = u ? getDisplayName(u) : 'Player';
+      const emoji = b.status === 'EXACT' ? '⭐' : '✅';
+      text += `${emoji} ${name}\n`;
+      text += `   ⚽ ${b.homeTeam} vs ${b.awayTeam}\n`;
+      text += `   💰 +${b.payout} coins\n\n`;
+    }
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+  });
+
+  bot.onText(/^\/payouts$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const telegramId = msg.from.id;
+    const user = await UserModel.findOne(telegramId);
+    if (!user) return bot.sendMessage(chatId, 'Use /start first');
+
+    const bets = await BetModel.findSettledByTelegramId(telegramId, 10);
+    if (!bets.length) {
+      return bot.sendMessage(chatId, '📊 No payouts yet. Place a bet to start!', { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+    }
+    let text =
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `  📊 RECENT PAYOUTS\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    for (const b of bets) {
+      const statusEmoji = b.status === 'EXACT' ? '⭐' : b.status === 'WON' ? '✅' : '❌';
+      const date = b.settledAt ? new Date(b.settledAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      const payoutStr = b.payout ? `💰 +${b.payout}` : '💸 -' + b.stake;
+      text += `${statusEmoji} ${b.homeTeam} vs ${b.awayTeam}  ${date}\n`;
+      text += `   ${payoutStr}\n\n`;
+    }
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+  });
+
+  bot.onText(/^\/spin$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const telegramId = msg.from.id;
+    const user = await UserModel.findOne(telegramId);
+    if (!user) return bot.sendMessage(chatId, 'Use /start first');
+
+    const now = Date.now();
+    const last = user.lastSpin || 0;
+    const COOLDOWN = 24 * 60 * 60 * 1000;
+
+    if (now - last < COOLDOWN) {
+      const remaining = COOLDOWN - (now - last);
+      const hours = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      return bot.sendMessage(chatId, `⏳ Spin again in ${hours}h ${mins}m.`, { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+    }
+
+    const prizes = [10, 20, 30, 50, 75, 100, 150, 200, 250, 500];
+    const won = prizes[Math.floor(Math.random() * prizes.length)];
+    const isVip = isVipActive(user);
+    const multiplier = isVip ? 2 : 1;
+    const finalWon = won * multiplier;
+
+    await UserModel.update(telegramId, {
+      balance: (user.balance || 0) + finalWon,
+      lastSpin: now
+    });
+
+    const vipMsg = isVip ? ' (VIP Double!)' : '';
+    await bot.sendMessage(chatId,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `  🎰 LUCKY SPIN\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🎉 You won ${finalWon} coins${vipMsg}!\n\n` +
+      `💰 New balance: ${formatBalance((user.balance || 0) + finalWon)}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `Come back tomorrow for another spin!`,
+      { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
   });
 
   bot.onText(/^\/history$/, async (msg) => {
@@ -1323,12 +1415,10 @@ function registerHandlers() {
           `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
           `  ⚽ MATCH CENTER\n` +
           `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-          `Choose an option:`;
+          `Choose a league to view upcoming matches:`;
         const keyboard = {
           inline_keyboard: [
-            [{ text: '📅 Upcoming', callback_data: 'matches_upcoming' }],
-            [{ text: '🔴 Live Matches', callback_data: 'matches_live' }],
-            [{ text: '🔴 Live Scores', callback_data: 'livescore' }],
+            [{ text: '📅 Upcoming Matches', callback_data: 'matches_upcoming' }],
             [{ text: '🔙 Main Menu', callback_data: 'menu' }]
           ]
         };
@@ -1395,6 +1485,88 @@ function registerHandlers() {
           ]
         };
         await bot.sendMessage(chatId, text, { reply_markup: keyboard });
+      }
+
+      else if (data === 'livewinner') {
+        await bot.answerCallbackQuery(query.id);
+        const won = await BetModel.findRecentWon(10);
+        if (!won.length) {
+          return bot.sendMessage(chatId, '🏆 No winners yet. Be the first to place a bet!', { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+        }
+        let text =
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `  🏆 LIVE WINNER\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        for (const b of won) {
+          const user = await UserModel.findOne(b.telegramId);
+          const name = user ? getDisplayName(user) : 'Player';
+          const emoji = b.status === 'EXACT' ? '⭐' : '✅';
+          text += `${emoji} ${name}\n`;
+          text += `   ⚽ ${b.homeTeam} vs ${b.awayTeam}\n`;
+          text += `   💰 +${b.payout} coins\n\n`;
+        }
+        text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+        await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+      }
+
+      else if (data === 'payouts') {
+        await bot.answerCallbackQuery(query.id);
+        const bets = await BetModel.findSettledByTelegramId(telegramId, 10);
+        if (!bets.length) {
+          return bot.sendMessage(chatId, '📊 No payouts yet. Place a bet to start!', { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+        }
+        let text =
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `  📊 RECENT PAYOUTS\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        for (const b of bets) {
+          const statusEmoji = b.status === 'EXACT' ? '⭐' : b.status === 'WON' ? '✅' : '❌';
+          const date = b.settledAt ? new Date(b.settledAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+          const payoutStr = b.payout ? `💰 +${b.payout}` : '💸 -' + b.stake;
+          text += `${statusEmoji} ${b.homeTeam} vs ${b.awayTeam}  ${date}\n`;
+          text += `   ${payoutStr}\n\n`;
+        }
+        text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+        await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+      }
+
+      else if (data === 'spin') {
+        await bot.answerCallbackQuery(query.id);
+        const user = await UserModel.findOne(telegramId);
+        if (!user) return bot.sendMessage(chatId, 'Use /start first');
+
+        const now = Date.now();
+        const last = user.lastSpin || 0;
+        const COOLDOWN = 24 * 60 * 60 * 1000;
+
+        if (now - last < COOLDOWN) {
+          const remaining = COOLDOWN - (now - last);
+          const hours = Math.floor(remaining / 3600000);
+          const mins = Math.floor((remaining % 3600000) / 60000);
+          return bot.sendMessage(chatId, `⏳ Spin again in ${hours}h ${mins}m.`, { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
+        }
+
+        const prizes = [10, 20, 30, 50, 75, 100, 150, 200, 250, 500];
+        const won = prizes[Math.floor(Math.random() * prizes.length)];
+        const isVip = isVipActive(user);
+        const multiplier = isVip ? 2 : 1;
+        const finalWon = won * multiplier;
+
+        await UserModel.update(telegramId, {
+          balance: (user.balance || 0) + finalWon,
+          lastSpin: now
+        });
+
+        const vipMsg = isVip ? ' (VIP Double!)' : '';
+        await bot.sendMessage(chatId,
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `  🎰 LUCKY SPIN\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `🎉 You won ${finalWon} coins${vipMsg}!\n\n` +
+          `💰 New balance: ${formatBalance((user.balance || 0) + finalWon)}\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `Come back tomorrow for another spin!`,
+          { reply_markup: { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] } });
       }
 
       else if (data.startsWith('league_matches_')) {
@@ -1591,15 +1763,17 @@ async function sendMainMenu(chatId, telegramId) {
         { text: '🎯 Place Bet', callback_data: 'bet' }
       ],
       [
-        { text: '🔴 Live Scores', callback_data: 'livescore' },
-        { text: '📜 My Bets', callback_data: 'mybets' }
-      ],
-      [
+        { text: '📜 My Bets', callback_data: 'mybets' },
         { text: '🏆 Leaderboard', callback_data: 'leaderboard' }
       ],
       [
         { text: '🎁 Referral', callback_data: 'referral' },
         { text: '🎁 Daily', callback_data: 'daily' }
+      ],
+      [
+        { text: '🎰 Spin', callback_data: 'spin' },
+        { text: '🏆 Live Winner', callback_data: 'livewinner' },
+        { text: '📊 Payouts', callback_data: 'payouts' }
       ],
       [
         { text: '💎 VIP', callback_data: 'vip' },

@@ -94,6 +94,34 @@ async function count() {
   return snapshot.numChildren();
 }
 
+async function findRecentWon(limit = 10) {
+  const ref = getBetsRef();
+  if (!ref) return [];
+  const snapshot = await ref.orderByChild('status').limitToLast(100).once('value');
+  const bets = [];
+  snapshot.forEach(child => {
+    const val = child.val();
+    if (val.status === 'WON' || val.status === 'EXACT') {
+      bets.push({ id: child.key, ...val });
+    }
+  });
+  return bets.reverse().slice(0, limit);
+}
+
+async function findSettledByTelegramId(telegramId, limit = 10) {
+  const ref = getBetsRef();
+  if (!ref) return [];
+  const snapshot = await ref.orderByChild('telegramId').equalTo(Number(telegramId)).once('value');
+  const bets = [];
+  snapshot.forEach(child => {
+    const val = child.val();
+    if (val.status === 'WON' || val.status === 'LOST' || val.status === 'EXACT') {
+      bets.push({ id: child.key, ...val });
+    }
+  });
+  return bets.reverse().slice(0, limit);
+}
+
 module.exports = {
   create,
   findById,
@@ -103,5 +131,7 @@ module.exports = {
   update,
   count,
   countByTelegramId,
-  countWinsByTelegramId
+  countWinsByTelegramId,
+  findRecentWon,
+  findSettledByTelegramId
 };
